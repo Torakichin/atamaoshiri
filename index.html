@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🍌 あたまおしりゲーム (名詞限定・完全一致版)</title>
+
+<style>
+body {
+    font-family: Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center; padding: 20px; background-color: #f4f4f9;
+}
+#game-container {
+    width: 90%; max-width: 600px; background-color: white; padding: 30px; border-radius: 15px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center;
+}
+h1 { color: #ffc107; margin-bottom: 20px; }
+#timer { font-size: 2em; font-weight: bold; color: #d9534f; margin-bottom: 15px; }
+#theme-area { background-color: #ffe082; padding: 15px; border-radius: 10px; margin-bottom: 25px;
+    display: flex; justify-content: center; gap: 40px; font-size: 1.5em; font-weight: bold; }
+.theme-word { display: flex; flex-direction: column; align-items: center; }
+.label { font-size: 0.7em; color: #333; margin-bottom: 5px; }
+.moji { font-size: 3em; color: #333; background-color: #fff; padding: 5px 15px; border-radius: 8px; border: 2px solid #ff9800; }
+#controls-area { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+#input-area { display: flex; justify-content: center; gap: 10px; }
+#button-area { display: flex; justify-content: center; gap: 10px; }
+#answer_input { padding: 10px; font-size: 1.2em; border: 2px solid #ccc; border-radius: 5px; flex-grow:1; max-width:300px; }
+#submit_button,#skip_button { padding:10px 20px;font-size:1.2em;border:none;border-radius:5px;cursor:pointer;transition:background-color 0.3s; }
+#submit_button { background-color:#5cb85c;color:white; }
+#submit_button:hover:not(:disabled) { background-color:#4cae4c; }
+#skip_button { background-color:#f0ad4e;color:white;width:120px; }
+#skip_button:hover:not(:disabled) { background-color:#ec971f; }
+#submit_button:disabled,#skip_button:disabled { background-color:#a0a0a0; cursor:not-allowed; }
+#message_area { min-height: 50px; font-size: 1.1em; margin-bottom: 15px; }
+#score-area { font-size:1.5em; font-weight:bold; color:#2a6496; }
+.success-message { color:green; font-weight:bold; }
+.fail-message { color:red; }
+
+/* 正解表示用ハイライト */
+.correct-highlight {
+    animation: highlight 2s ease-in-out;
+    color: blue;
+    font-weight: bold;
+}
+@keyframes highlight {
+    0% { background-color: yellow; }
+    100% { background-color: transparent; }
+}
+
+/* 音楽ボタン */
+#music-button {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    font-size: 2em;
+    cursor: pointer;
+    user-select: none;
+    z-index: 1000;
+}
+#music-button.off { color: #aaa; }
+#music-button.on { color: #ff9800; }
+</style>
+</head>
+<body>
+
+<div id="game-container">
+    <h1>🍌 あたまおしりゲーム 🍌</h1>
+    <p>✅ 判定は活用を持たない名詞限定です</p>
+    <div id="score-area">SCORE: <span id="current_score">0</span></div>
+    <div id="timer">準備中...</div>
+    <div id="theme-area">
+        <div class="theme-word"><span class="label">あたまの文字</span><span id="atama_moji" class="moji">?</span></div>
+        <div class="theme-word"><span class="label">おしりの文字</span><span id="oshiri_moji" class="moji">?</span></div>
+    </div>
+    <div id="controls-area">
+        <div id="input-area">
+            <input type="text" id="answer_input" placeholder="ここに答えを入力" maxlength="20" disabled>
+            <button id="submit_button" disabled>回答する / Enter</button>
+        </div>
+        <div id="button-area">
+            <button id="skip_button" disabled>スキップ (5秒後)</button>
+        </div>
+    </div>
+    <div id="message_area">辞書データを読み込み中...</div>
+</div>
+
+<div id="music-button" class="on">🎵</div>
+
+<script>
+const HIRAGANA_MOJI = "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわ";
+const START_TIME = 60; 
+const SKIP_COOLDOWN = 5000;
+
+let dictionary = new Set();
+let requiredAtama = '', requiredOshiri = '';
+let timerId, skipCooldownId, timeLeft = START_TIME, score = 0, isGameRunning=false, answeredWords=new Set();
+
+const atamaMojiEl = document.getElementById('atama_moji');
+const oshiriMojiEl = document.getElementById('oshiri_moji');
+const answerInputEl = document.getElementById('answer_input');
+const submitButton = document.getElementById('submit_button');
+const skipButton = document.getElementById('skip_button');
+const timerEl = document.getElementById('timer');
+const messageAreaEl = document.getElementById('message_area');
+const scoreEl = document.getElementById('current_score');
+const musicBtn = document.getElementById('music-button');
+
+// ------------------- CSV 読み込み -------------------
+function loadCSVFromFile(file) {
+    const reader = new FileReader();
+    reader.onload = function(e){
+        const text = e.target.result;
+        const lines = text.split(/\r?\n/);
+        dictionary.clear();
+        for(const line of lines){
+            if(!line) continue;
+            const parts = line.split(',');
+            // parts[0]=漢字/カタカナ, parts[1]=ひらがな
+            dictionary.add(parts[1]?parts[1].trim():parts[0].trim());
+        }
+        messageAreaEl.textContent = `辞書読み込み完了 (${dictionary.size}語)`;
+        enableGame();
+    };
+    reader.readAsText(file,'UTF-8');
+}
+
+function enableGame(){
+    submitButton.disabled=false;
+    submitButton.textContent="ゲーム開始 / Enter";
+    submitButton.onclick=startGame;
+    answerInputEl.disabled=false;
+}
+
+// fetch で自動読み込み
+fetch("japanese_vocab_full.csv")
+.then(resp=>resp.text())
+.then(text=>{
+    const lines = text.split(/\r?\n/);
+    dictionary.clear();
+    for(const line of lines){
+        if(!line) continue;
+        const parts = line.split(',');
+        dictionary.add(parts[1]?parts[1].trim():parts[0].trim());
+    }
+    messageAreaEl.textContent = `辞書読み込み完了 (${dictionary.size}語)`;
+    enableGame();
+})
+.catch(err=>{
+    console.warn("自動読み込み失敗:", err);
+    messageAreaEl.textContent="⚠️ 自動読み込み失敗。CSVを手動で選択してください。";
+    const fileInput=document.createElement('input');
+    fileInput.type='file';
+    fileInput.accept='.csv';
+    fileInput.onchange=()=>{ if(fileInput.files.length) loadCSVFromFile(fileInput.files[0]); };
+    document.getElementById('game-container').appendChild(fileInput);
+});
+
+// ------------------- ゲームロジック -------------------
+function generateRandomMoji(){
+    let moji;
+    do { moji = HIRAGANA_MOJI.charAt(Math.floor(Math.random()*HIRAGANA_MOJI.length)); }
+    while(moji==='を'); // あたま・おしりに「を」禁止
+    return moji;
+}
+
+function setNextTheme(){
+    requiredAtama = generateRandomMoji();
+    requiredOshiri = generateRandomMoji();
+    atamaMojiEl.textContent=requiredAtama.toUpperCase();
+    oshiriMojiEl.textContent=requiredOshiri.toUpperCase();
+    messageAreaEl.innerHTML=`**${requiredAtama.toUpperCase()}** で始まり、**${requiredOshiri.toUpperCase()}** で終わる名詞を入力！`;
+    skipButton.disabled=true; skipButton.textContent="スキップ (5秒後)";
+    clearTimeout(skipCooldownId);
+    skipCooldownId=setTimeout(()=>{skipButton.disabled=false; skipButton.textContent="スキップ";}, SKIP_COOLDOWN);
+}
+
+function skipTheme(){ if(!isGameRunning||skipButton.disabled)return; messageAreaEl.innerHTML=`▶️ スキップ！次のお題`; setNextTheme(); }
+
+function startGame(){
+    if(isGameRunning) return;
+    isGameRunning=true; score=0; answeredWords.clear(); scoreEl.textContent=score; answerInputEl.value='';
+    submitButton.textContent="回答する / Enter"; submitButton.onclick=submitAnswer; skipButton.onclick=skipTheme;
+    setNextTheme(); startTimer();
+    // BGM自動再生（ユーザー操作で必要な場合）
+    if(bgmPlaying) bgmAudio.play().catch(()=>{});
+}
+
+function startTimer(){
+    timeLeft=START_TIME; timerEl.textContent=`${timeLeft}秒`; timerEl.style.color='#007bff';
+    if(timerId) clearInterval(timerId);
+    timerId=setInterval(()=>{
+        timeLeft--; timerEl.textContent=`${timeLeft}秒`;
+        if(timeLeft<=0){ clearInterval(timerId); clearTimeout(skipCooldownId); endGame(); }
+        else if(timeLeft<=5) timerEl.style.color='#d9534f';
+    },1000);
+}
+
+function endGame(){
+    isGameRunning=false;
+    submitButton.textContent="ゲーム終了"; submitButton.disabled=true;
+    skipButton.disabled=true; answerInputEl.disabled=true; answerInputEl.style.backgroundColor='#ddd';
+    messageAreaEl.innerHTML=`🎉 ゲームオーバー！最終スコア <span style="color:red; font-size:1.2em;">${score}</span> 点`;
+    setTimeout(()=>{
+        submitButton.textContent="もう一度遊ぶ / Enter"; submitButton.onclick=startGame; submitButton.disabled=false;
+        answerInputEl.disabled=false; answerInputEl.style.backgroundColor='white';
+        messageAreaEl.textContent="準備完了！「もう一度遊ぶ」を押してください";
+    },5000);
+}
+
+function submitAnswer(){
+    if(!isGameRunning) return;
+    const answer=answerInputEl.value.trim(); answerInputEl.value='';
+    if(answer.length<2){ messageAreaEl.innerHTML='<span class="fail-message">⚠️ 2文字以上入力してください</span>'; return;}
+    if(answeredWords.has(answer)){ messageAreaEl.innerHTML=`<span class="fail-message">❌ ${answer} は既に使用済み</span>`; return;}
+    
+    const hiraganaAnswer = answer; 
+    if(dictionary.has(hiraganaAnswer)){
+        const atama = hiraganaAnswer.charAt(0);
+        const oshiri = hiraganaAnswer.charAt(hiraganaAnswer.length-1);
+        if(atama===requiredAtama && oshiri===requiredOshiri){
+            answeredWords.add(answer);
+            score+=hiraganaAnswer.length;
+            scoreEl.textContent=score;
+            // 正解表示にsurface文字（CSVの漢字/カタカナ）とスコアを表示
+            let surface='';
+            const lines = Array.from(dictionary); // CSVのsurfaceは別に保持しても良いが簡易版
+            surface=answer; // ここでは簡易にanswer表示、必要なら辞書から漢字取得
+            const highlightSpan = document.createElement('span');
+            highlightSpan.className='correct-highlight';
+            highlightSpan.innerHTML=`⭕ 入力: ${answer} / 辞書: ${surface} / +${hiraganaAnswer.length}点`;
+            messageAreaEl.innerHTML='';
+            messageAreaEl.appendChild(highlightSpan);
+            setTimeout(()=>{ setNextTheme(); },2000);
+        } else {
+            messageAreaEl.innerHTML=`<span class="fail-message">❌ あたま/おしりが一致しません</span>`;
+        }
+    } else {
+        messageAreaEl.innerHTML=`<span class="fail-message">❌ 辞書に存在しません</span>`;
+    }
+}
+
+// Enterキーでも送信
+answerInputEl.addEventListener('keydown', (e)=>{ if(e.key==='Enter') submitAnswer(); });
+
+// ------------------- BGM設定 -------------------
+const bgmFiles = ["music1.mp3", "music2.mp3"];
+let currentBgmIndex = 0;
+let bgmAudio = new Audio();
+bgmAudio.src = bgmFiles[currentBgmIndex];
+bgmAudio.loop = false;
+bgmAudio.volume = 0.5;
+let bgmPlaying = true;
+
+function playNextBgm() {
+    currentBgmIndex = (currentBgmIndex + 1) % bgmFiles.length;
+    bgmAudio.src = bgmFiles[currentBgmIndex];
+    if (bgmPlaying) bgmAudio.play();
+}
+bgmAudio.addEventListener('ended', playNextBgm);
+
+musicBtn.addEventListener('click', ()=>{
+    bgmPlaying = !bgmPlaying;
+    if(bgmPlaying){
+        bgmAudio.play();
+        musicBtn.classList.remove('off'); musicBtn.classList.add('on');
+    } else {
+        bgmAudio.pause();
+        musicBtn.classList.remove('on'); musicBtn.classList.add('off');
+    }
+});
+</script>
+</body>
+</html>
